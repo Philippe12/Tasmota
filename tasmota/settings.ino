@@ -765,9 +765,13 @@ void SettingsDefaultSet2(void)
   }
 
   // Module
-//  flag.interlock |= 0;
-  Settings.interlock[0] = 0xFF;         // Legacy support using all relays in one interlock group
+  flag.interlock |= APP_INTERLOCK_MODE;
+  Settings.interlock[0] = APP_INTERLOCK_GROUP_1;
+  Settings.interlock[1] = APP_INTERLOCK_GROUP_2;
+  Settings.interlock[2] = APP_INTERLOCK_GROUP_3;
+  Settings.interlock[3] = APP_INTERLOCK_GROUP_4;
   Settings.module = MODULE;
+  Settings.fallback_module = FALLBACK_MODULE;
   ModuleDefault(WEMOS);
 //  for (uint32_t i = 0; i < ARRAY_SIZE(Settings.my_gp.io); i++) { Settings.my_gp.io[i] = GPIO_NONE; }
   SettingsUpdateText(SET_FRIENDLYNAME1, PSTR(FRIENDLY_NAME));
@@ -798,7 +802,16 @@ void SettingsDefaultSet2(void)
   Settings.serial_delimiter = 0xff;
   Settings.seriallog_level = SERIAL_LOG_LEVEL;
 
+  // Ethernet
+  flag4.network_ethernet |= 1;
+#ifdef ESP32
+  Settings.eth_type = ETH_TYPE;
+  Settings.eth_clk_mode = ETH_CLKMODE;
+  Settings.eth_address = ETH_ADDR;
+#endif
+
   // Wifi
+  flag4.network_wifi |= 1;
   flag3.use_wifi_scan |= WIFI_SCAN_AT_RESTART;
   flag3.use_wifi_rescan |= WIFI_SCAN_REGULARLY;
   Settings.wifi_output_power = 170;
@@ -1178,8 +1191,11 @@ void SettingsDelta(void)
       Settings.param[P_MDNS_DELAYED_START] = 0;
     }
     if (Settings.version < 0x0604010B) {
-      Settings.interlock[0] = 0xFF;         // Legacy support using all relays in one interlock group
-      for (uint32_t i = 1; i < MAX_INTERLOCKS; i++) { Settings.interlock[i] = 0; }
+      Settings.flag.interlock = APP_INTERLOCK_MODE;
+      Settings.interlock[0] = APP_INTERLOCK_GROUP_1;
+      Settings.interlock[1] = APP_INTERLOCK_GROUP_2;
+      Settings.interlock[2] = APP_INTERLOCK_GROUP_3;
+      Settings.interlock[3] = APP_INTERLOCK_GROUP_4;
     }
     if (Settings.version < 0x0604010D) {
       Settings.param[P_BOOT_LOOP_OFFSET] = BOOT_LOOP_OFFSET;  // SetOption36
@@ -1438,6 +1454,20 @@ void SettingsDelta(void)
       Settings.ledpwm_off = 0;
       Settings.ledpwm_on = 255;
       Settings.ledpwm_mask = 0;
+    }
+    if (Settings.version < 0x08030104) {
+      Settings.flag4.network_wifi = 1;
+      Settings.flag4.network_ethernet = 1;
+    }
+#ifdef ESP32
+    if (Settings.version < 0x08030105) {
+      Settings.eth_type = ETH_TYPE;
+      Settings.eth_clk_mode = ETH_CLKMODE;
+      Settings.eth_address = ETH_ADDR;
+    }
+#endif
+    if (Settings.version < 0x08030106) {
+      Settings.fallback_module = FALLBACK_MODULE;
     }
 
     Settings.version = VERSION;

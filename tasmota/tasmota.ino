@@ -205,7 +205,7 @@ void setup(void) {
 #endif
 #endif
 
-  global_state.data = 3;  // Init global state (wifi_down, mqtt_down) to solve possible network issues
+  global_state.data = 0xF;  // Init global state (wifi_down, mqtt_down) to solve possible network issues
 
   RtcRebootLoad();
   if (!RtcRebootValid()) {
@@ -278,12 +278,8 @@ void setup(void) {
 #endif
       }
       if (RtcReboot.fast_reboot_count > Settings.param[P_BOOT_LOOP_OFFSET] +4) {  // Restarted 6 times
-#ifdef ESP8266
-        Settings.module = SONOFF_BASIC;             // Reset module to Sonoff Basic
-  //      Settings.last_module = SONOFF_BASIC;
-#else  // ESP32
-        Settings.module = WEMOS;                    // Reset module to Wemos
-#endif  // ESP8266 - ESP32
+        Settings.module = Settings.fallback_module;  // Reset module to fallback module
+//        Settings.last_module = Settings.fallback_module;
       }
       AddLog_P2(LOG_LEVEL_INFO, PSTR(D_LOG_APPLICATION D_LOG_SOME_SETTINGS_RESET " (%d)"), RtcReboot.fast_reboot_count);
     }
@@ -322,6 +318,11 @@ void setup(void) {
 
   XdrvCall(FUNC_INIT);
   XsnsCall(FUNC_INIT);
+#ifdef USE_SCRIPT
+  Run_Scripter(">BS",3,0);
+#endif
+
+  rules_flag.system_init = 1;
 }
 
 void BacklogLoop(void) {
@@ -411,7 +412,7 @@ void loop(void) {
     if (my_activity < (uint32_t)ssleep) {
       SleepDelay((uint32_t)ssleep - my_activity);  // Provide time for background tasks like wifi
     } else {
-      if (global_state.wifi_down) {
+      if (global_state.network_down) {
         SleepDelay(my_activity /2);                // If wifi down and my_activity > setoption36 then force loop delay to 1/3 of my_activity period
       }
     }
