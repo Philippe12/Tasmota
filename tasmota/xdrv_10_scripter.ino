@@ -67,14 +67,16 @@ keywords if then else endif, or, and are better readable for beginners (others m
 uint32_t EncodeLightId(uint8_t relay_id);
 uint32_t DecodeLightId(uint32_t hue_id);
 
-
+#ifdef USE_UNISHOX_COMPRESSION
+#define USE_SCRIPT_COMPRESSION
+#endif
 
 // solve conficting defines
 // highest priority
 #ifdef USE_SCRIPT_FATFS
 #undef LITTLEFS_SCRIPT_SIZE
 #undef EEP_SCRIPT_SIZE
-#undef USE_UNISHOX_COMPRESSION
+#undef USE_SCRIPT_COMPRESSION
 #if USE_SCRIPT_FATFS==-1
 #ifdef ESP32
 #error "script fat file option -1 currently not supported for ESP32"
@@ -89,28 +91,29 @@ uint32_t DecodeLightId(uint32_t hue_id);
 // lfs on esp8266 spiffs on esp32
 #ifdef LITTLEFS_SCRIPT_SIZE
 #undef EEP_SCRIPT_SIZE
-#undef USE_UNISHOX_COMPRESSION
+#undef USE_SCRIPT_COMPRESSION
 #pragma message "script little file system option used"
 #endif // LITTLEFS_SCRIPT_SIZE
 
 // eeprom script
 #ifdef EEP_SCRIPT_SIZE
-#undef USE_UNISHOX_COMPRESSION
+#undef USE_SCRIPT_COMPRESSION
 #ifdef USE_24C256
 #pragma message "script 24c256 file option used"
 #else
-#warning "EEP_SCRIPT_SIZE also needs USE_24C256"
-#define USE_24C256
+//#warning "EEP_SCRIPT_SIZE also needs USE_24C256"
+#pragma message "internal eeprom script buffer used"
+//#define USE_24C256
 #endif
 #endif // EEP_SCRIPT_SIZE
 
 // compression last option before default
-#ifdef USE_UNISHOX_COMPRESSION
+#ifdef USE_SCRIPT_COMPRESSION
 #pragma message "script compression option used"
 #endif // USE_UNISHOX_COMPRESSION
 
 
-#ifdef USE_UNISHOX_COMPRESSION
+#ifdef USE_SCRIPT_COMPRESSION
 #include <unishox.h>
 
 #define SCRIPT_COMPRESS compressor.unishox_compress
@@ -118,7 +121,7 @@ uint32_t DecodeLightId(uint32_t hue_id);
 #ifndef UNISHOXRSIZE
 #define UNISHOXRSIZE 2560
 #endif
-#endif // USE_UNISHOX_COMPRESSION
+#endif // USE_SCRIPT_COMPRESSION
 
 #ifdef USE_SCRIPT_TIMER
 #include <Ticker.h>
@@ -361,6 +364,10 @@ struct SCRIPT_MEM {
     uint8_t max_ssize;
     uint8_t script_loglevel;
     uint8_t flags;
+    uint8_t si_num;
+    uint8_t siro_num;
+    char *last_index_string;
+
 #ifdef USE_SCRIPT_FATFS
     File files[SFS_MAX];
     FILE_FLAGS file_flags[SFS_MAX];
@@ -372,12 +379,23 @@ struct SCRIPT_MEM {
 #endif
 } glob_script_mem;
 
+
+
 #ifdef USE_SCRIPT_GLOBVARS
 IPAddress last_udp_ip;
 WiFiUDP Script_PortUdp;
+
+#ifndef USE_DEVICE_GROUPS
+char * IPAddressToString(const IPAddress& ip_address) {
+  static char buffer[16];
+  sprintf_P(buffer, PSTR("%u.%u.%u.%u"), ip_address[0], ip_address[1], ip_address[2], ip_address[3]);
+  return buffer;
+}
+#endif
 #endif
 
 int16_t last_findex;
+int16_t last_sindex;
 uint8_t tasm_cmd_activ=0;
 uint8_t fast_script=0;
 uint8_t glob_script=0;
@@ -474,7 +492,7 @@ char *script;
         if (*lp==';') goto next_line;
         if (init) {
             // init section
-            if (*lp=='>') {
+            if (*lp=='>' || !*lp) {
                 init=0;
                 break;
             }
@@ -1310,6 +1328,7 @@ char *isvar(char *lp, uint8_t *vtype,struct T_INDEX *tind,float *fp,char *sp,Jso
     strcpy (dvnam,vname);
     uint8_t olen=len;
     last_findex=-1;
+    last_sindex=-1;
     char *ja=strchr(dvnam,'[');
     if (ja) {
       *ja=0;
@@ -1352,10 +1371,12 @@ char *isvar(char *lp, uint8_t *vtype,struct T_INDEX *tind,float *fp,char *sp,Jso
 
     if (jo) {
       // look for json input
+      char jvname[32];
+      strcpy(jvname,vname);
       const char* str_value;
       uint8_t aindex;
       String vn;
-      char *ja=strchr(vname,'[');
+      char *ja=strchr(jvname,'[');
       if (ja) {
         // json array
         *ja=0;
@@ -1368,7 +1389,7 @@ char *isvar(char *lp, uint8_t *vtype,struct T_INDEX *tind,float *fp,char *sp,Jso
         aindex--;
       }
       if (jo->success()) {
-        char *subtype=strchr(vname,'#');
+        char *subtype=strchr(jvname,'#');
         char *subtype2;
         if (subtype) {
           *subtype=0;
@@ -1379,7 +1400,7 @@ char *isvar(char *lp, uint8_t *vtype,struct T_INDEX *tind,float *fp,char *sp,Jso
             *subtype2++;
           }
         }
-        vn=vname;
+        vn=jvname;
         str_value = (*jo)[vn];
         if ((*jo)[vn].success()) {
           if (subtype) {
@@ -1896,7 +1917,7 @@ chknext:
         break;
       case 'g':
         if (!strncmp(vname,"gtmp",4)) {
-          fvar=global_temperature;
+          fvar=global_temperature_celsius;
           goto exit;
         }
         if (!strncmp(vname,"ghum",4)) {
@@ -1904,7 +1925,7 @@ chknext:
           goto exit;
         }
         if (!strncmp(vname,"gprs",4)) {
-          fvar=global_pressure;
+          fvar=global_pressure_hpa;
           goto exit;
         }
         if (!strncmp(vname,"gtopic",6)) {
@@ -1979,6 +2000,7 @@ chknext:
 //#endif
 #endif
         break;
+#define MAX_SARRAY_NUM 32
       case 'i':
         if (!strncmp(vname,"int(",4)) {
           lp=GetNumericResult(lp+4,OPER_EQU,&fvar,0);
@@ -1994,20 +2016,73 @@ chknext:
             break;
           }
           lp++;
-          char *sstr=lp;
+
+          if (glob_script_mem.si_num>0 && glob_script_mem.last_index_string) {
+            free(glob_script_mem.last_index_string);
+          }
+          char *sstart=lp;
+          uint8_t slen=0;
           for (uint32_t cnt=0; cnt<256; cnt++) {
-              if (lp[cnt]='\n' || lp[cnt]=='"') {
-                lp+=cnt+1;
+              if (*lp=='\n' || *lp=='"' || *lp==0) {
+                lp++;
+                if (cnt>0 && !slen) {
+                  slen++;
+                }
+                glob_script_mem.siro_num=slen;
                 break;
               }
+              if (*lp=='|') {
+                slen++;
+              }
+              lp++;
           }
-          char str[SCRIPT_MAXSSIZE];
-          GetTextIndexed(str, sizeof(str), fvar, sstr);
+
+          glob_script_mem.si_num = fvar;
+          if (glob_script_mem.si_num>0) {
+            if (glob_script_mem.si_num>MAX_SARRAY_NUM) {
+              glob_script_mem.si_num=MAX_SARRAY_NUM;
+            }
+
+            glob_script_mem.last_index_string=(char*)calloc(glob_script_mem.max_ssize*glob_script_mem.si_num,1);
+            for (uint32_t cnt=0; cnt<glob_script_mem.siro_num; cnt++) {
+              char str[SCRIPT_MAXSSIZE];
+              GetTextIndexed(str, sizeof(str), cnt, sstart);
+              strlcpy(glob_script_mem.last_index_string+(cnt*glob_script_mem.max_ssize),str,glob_script_mem.max_ssize);
+            }
+          } else {
+              glob_script_mem.last_index_string=sstart;
+          }
+
           lp++;
-          if (sp) strlcpy(sp,str,glob_script_mem.max_ssize);
           fvar=0;
           len=0;
           goto exit;
+        }
+        if (!strncmp(vname,"is[",3)) {
+          lp=GetNumericResult(lp+3,OPER_EQU,&fvar,0);
+          SCRIPT_SKIP_SPACES
+          char str[SCRIPT_MAXSSIZE];
+          str[0]=0;
+          uint8_t index=fvar;
+          if (index<1) index=1;
+          index--;
+          last_sindex = index;
+          if (glob_script_mem.last_index_string) {
+            if (!glob_script_mem.si_num) {
+              if (index<=glob_script_mem.siro_num) {
+                GetTextIndexed(str, sizeof(str), index , glob_script_mem.last_index_string);
+              }
+            } else {
+              if (index>glob_script_mem.si_num) {
+                fvar=glob_script_mem.si_num;
+              }
+              strlcpy(str,glob_script_mem.last_index_string+(index*glob_script_mem.max_ssize),glob_script_mem.max_ssize);
+            }
+          }
+          lp++;
+          if (sp) strlcpy(sp,str,glob_script_mem.max_ssize);
+          len=0;
+          goto strexit;
         }
         break;
       case 'l':
@@ -2119,6 +2194,22 @@ chknext:
           len=0;
           goto exit;
         }
+#ifdef USE_MORITZ
+        if (!strncmp(vname,"mo(",3)) {
+          float fvar1;
+          lp=GetNumericResult(lp+3,OPER_EQU,&fvar1,0);
+          SCRIPT_SKIP_SPACES
+          float fvar2;
+          lp=GetNumericResult(lp,OPER_EQU,&fvar2,0);
+          SCRIPT_SKIP_SPACES
+          char rbuff[64];
+          fvar=mo_getvars(fvar1,fvar2,rbuff);
+          lp++;
+          if (sp) strlcpy(sp,rbuff,glob_script_mem.max_ssize);
+          len=0;
+          goto strexit;
+        }
+#endif
         break;
       case 'p':
         if (!strncmp(vname,"pin[",4)) {
@@ -3213,11 +3304,28 @@ void esp32_beep(int32_t freq ,uint32_t len) {
 // execute section of scripter
 int16_t Run_Scripter(const char *type, int8_t tlen, char *js) {
 
+    if (!glob_script_mem.scriptptr) {
+      return -99;
+    }
+
     if (tasm_cmd_activ && tlen>0) return 0;
 
+    JsonObject  *jo=0;
+    DynamicJsonBuffer jsonBuffer; // on heap
+    JsonObject &jobj=jsonBuffer.parseObject(js);
+    if (js) {
+      jo=&jobj;
+    } else {
+      jo=0;
+    }
+
+    return Run_script_sub(type, tlen, jo);
+}
+
+int16_t Run_script_sub(const char *type, int8_t tlen, JsonObject *jo) {
     uint8_t vtype=0,sindex,xflg,floop=0,globvindex,fromscriptcmd=0;
     char *lp_next;
-    int8_t globaindex;
+    int8_t globaindex,saindex;
     struct T_INDEX ind;
     uint8_t operand,lastop,numeric=1,if_state[IF_NEST],if_exe[IF_NEST],if_result[IF_NEST],and_or,ifstck=0;
     if_state[ifstck]=0;
@@ -3234,19 +3342,6 @@ int16_t Run_Scripter(const char *type, int8_t tlen, char *js) {
     char *cv_ptr;
     float fvar=0,fvar1,sysvar,swvar;
     uint8_t section=0,sysv_type=0,swflg=0;
-
-    if (!glob_script_mem.scriptptr) {
-      return -99;
-    }
-
-    JsonObject  *jo=0;
-    DynamicJsonBuffer jsonBuffer; // on heap
-    JsonObject &jobj=jsonBuffer.parseObject(js);
-    if (js) {
-      jo=&jobj;
-    } else {
-      jo=0;
-    }
 
     char *lp=glob_script_mem.scriptptr;
 
@@ -3370,10 +3465,15 @@ int16_t Run_Scripter(const char *type, int8_t tlen, char *js) {
                   lp=GetNumericResult(lp,OPER_EQU,&cv_inc,0);
                   //SCRIPT_SKIP_EOL
                   cv_ptr=lp;
-                  if (*cv_count<cv_max) {
+                  if (*cv_count<=cv_max && cv_inc>0) {
+                    // inc loop
                     floop=1;
                   } else {
+                    // dec loop
                     floop=2;
+                    if (cv_inc>0) {
+                      floop=1;
+                    }
                   }
               } else {
                       // error
@@ -3458,9 +3558,11 @@ int16_t Run_Scripter(const char *type, int8_t tlen, char *js) {
 
             if (!strncmp(lp,"break",5)) {
               lp+=5;
-              if (floop && lp_next) {
+              if (floop) {
                 // should break loop
-                lp=lp_next;
+                if (lp_next) {
+                  lp=lp_next;
+                }
                 floop=0;
               } else {
                 section=0;
@@ -3652,7 +3754,12 @@ int16_t Run_Scripter(const char *type, int8_t tlen, char *js) {
                 str[0]='>';
                 lp=GetStringResult(lp,OPER_EQU,&str[1],0);
                 lp++;
-                execute_script(str);
+                //execute_script(str);
+                char *svd_sp=glob_script_mem.scriptptr;
+                strcat(str,"\n#");
+                glob_script_mem.scriptptr=str;
+                Run_script_sub(">",1,jo);
+                glob_script_mem.scriptptr=svd_sp;
             }
 
             // check for variable result
@@ -3709,7 +3816,7 @@ int16_t Run_Scripter(const char *type, int8_t tlen, char *js) {
                       switch (lastop) {
                           case OPER_EQU:
                               if (glob_script_mem.var_not_found) {
-                                if (!js) toLogEOL("var not found: ",lp);
+                                if (!jo) toLogEOL("var not found: ",lp);
                                 goto next_line;
                               }
                               *dfvar=fvar;
@@ -3774,13 +3881,14 @@ int16_t Run_Scripter(const char *type, int8_t tlen, char *js) {
                     // string result
                     numeric=0;
                     sindex=index;
+                    saindex=last_sindex;
                     // string result
                     char str[SCRIPT_MAXSSIZE];
                     lp=getop(lp,&lastop);
                     char *slp=lp;
                     glob_script_mem.glob_error=0;
                     lp=GetStringResult(lp,OPER_EQU,str,jo);
-                    if (!js && glob_script_mem.glob_error) {
+                    if (!jo && glob_script_mem.glob_error) {
                       // mismatch
                       lp=GetNumericResult(slp,OPER_EQU,&fvar,0);
                       dtostrfd(fvar,6,str);
@@ -3795,10 +3903,19 @@ int16_t Run_Scripter(const char *type, int8_t tlen, char *js) {
                         script_udp_sendvar(varname,0,str);
                       }
 #endif
-                      if (lastop==OPER_EQU) {
-                        strlcpy(glob_script_mem.glob_snp+(sindex*glob_script_mem.max_ssize),str,glob_script_mem.max_ssize);
-                      } else if (lastop==OPER_PLSEQU) {
-                        strncat(glob_script_mem.glob_snp+(sindex*glob_script_mem.max_ssize),str,glob_script_mem.max_ssize);
+                      if (saindex>=0) {
+                        if (lastop==OPER_EQU) {
+                          strlcpy(glob_script_mem.last_index_string+(saindex*glob_script_mem.max_ssize),str,glob_script_mem.max_ssize);
+                        } else if (lastop==OPER_PLSEQU) {
+                          strncat(glob_script_mem.last_index_string+(saindex*glob_script_mem.max_ssize),str,glob_script_mem.max_ssize);
+                        }
+                        last_sindex=-1;
+                      } else {
+                        if (lastop==OPER_EQU) {
+                          strlcpy(glob_script_mem.glob_snp+(sindex*glob_script_mem.max_ssize),str,glob_script_mem.max_ssize);
+                        } else if (lastop==OPER_PLSEQU) {
+                          strncat(glob_script_mem.glob_snp+(sindex*glob_script_mem.max_ssize),str,glob_script_mem.max_ssize);
+                        }
                       }
                     }
                   }
@@ -4568,7 +4685,7 @@ void SaveScriptEnd(void) {
     glob_script_mem.script_mem_size=0;
   }
 
-#ifdef USE_UNISHOX_COMPRESSION
+#ifdef USE_SCRIPT_COMPRESSION
   //AddLog_P2(LOG_LEVEL_INFO,PSTR("in string: %s len = %d"),glob_script_mem.script_ram,strlen(glob_script_mem.script_ram));
   uint32_t len_compressed = SCRIPT_COMPRESS(glob_script_mem.script_ram, strlen(glob_script_mem.script_ram), Settings.rules[0], MAX_SCRIPT_SIZE-1);
   if (len_compressed > 0) {
@@ -4577,7 +4694,7 @@ void SaveScriptEnd(void) {
   } else {
     AddLog_P2(LOG_LEVEL_INFO, PSTR("script compress error: %d"), len_compressed);
   }
-#endif // USE_UNISHOX_COMPRESSION
+#endif // USE_SCRIPT_COMPRESSION
 
   if (bitRead(Settings.rule_enabled, 0)) {
     int16_t res=Init_Scripter();
@@ -4585,7 +4702,10 @@ void SaveScriptEnd(void) {
       AddLog_P2(LOG_LEVEL_INFO, PSTR("script init error: %d"), res);
       return;
     }
-    Run_Scripter(">B",2,0);
+
+    Run_Scripter(">B\n",3,0);
+    Run_Scripter(">BS",3,0);
+
     fast_script=Run_Scripter(">F",-2,0);
   }
 }
@@ -5400,12 +5520,181 @@ String ScriptUnsubscribe(const char * data, int data_len)
 
 #ifdef USE_SCRIPT_WEB_DISPLAY
 
+#ifdef SCRIPT_FULL_WEBPAGE
+const char HTTP_WEB_FULL_DISPLAY[] PROGMEM =
+  "<p><form action='" "sfd" "' method='get'><button>" "%s" "</button></form></p>";
+
+const char HTTP_SCRIPT_FULLPAGE1[] PROGMEM =
+  "<!DOCTYPE html><html lang=\"" D_HTML_LANGUAGE "\" class=\"\">"
+  "<head>"
+  "<meta charset='utf-8'>"
+  "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,user-scalable=no\"/>"
+  "<title>%s - %s</title>"
+  "<script>"
+  "var x=null,lt,to,tp,pc='';"            // x=null allow for abortion
+  "function eb(s){"
+    "return document.getElementById(s);"  // Alias to save code space
+  "}"
+  "function qs(s){"                       // Alias to save code space
+    "return document.querySelector(s);"
+  "}"
+  "function wl(f){"                       // Execute multiple window.onload
+    "window.addEventListener('load',f);"
+  "}"
+    "var rfsh=1;"
+    "function la(p){"
+      "var a='';"
+      "if(la.arguments.length==1){"
+        "a=p;"
+        "clearTimeout(lt);"
+      "}"
+      "if(x!=null){x.abort();}"             // Abort if no response within 2 seconds (happens on restart 1)
+      "x=new XMLHttpRequest();"
+      "x.onreadystatechange=function(){"
+        "if(x.readyState==4&&x.status==200){"
+          "var s=x.responseText.replace(/{t}/g,\"<table style='width:100%%'>\").replace(/{s}/g,\"<tr><th>\").replace(/{m}/g,\"</th><td>\").replace(/{e}/g,\"</td></tr>\").replace(/{c}/g,\"%%'><div style='text-align:center;font-weight:\");"
+          "eb('l1').innerHTML=s;"
+        "}"
+      "};"
+      "if (rfsh) {"
+        "x.open('GET','./sfd?m=1'+a,true);"       // ?m related to Webserver->hasArg("m")
+        "x.send();"
+        "lt=setTimeout(la,%d);"               // Settings.web_refresh
+      "}"
+    "}";
+
+const char HTTP_SCRIPT_FULLPAGE2[] PROGMEM =
+    "function seva(par,ivar){"
+      "la('&sv='+ivar+'_'+par);"
+    "}"
+    "function siva(par,ivar){"
+      "rfsh=1;"
+      "la('&sv='+ivar+'_'+par);"
+      "rfsh=0;"
+    "}"
+    "function pr(f){"
+      "if (f) {"
+        "lt=setTimeout(la,%d);"
+        "rfsh=1;"
+      "} else {"
+        "clearTimeout(lt);"
+        "rfsh=0;"
+      "}"
+    "}"
+    "</script>";
+
+
+#ifdef USE_SCRIPT_FATFS
+
+const char HTTP_SCRIPT_MIMES[] PROGMEM =
+  "HTTP/1.1 200 OK\r\n"
+  "Content-disposition: inline; filename=%s"
+  "Content-type: %s\r\n\r\n";
+
+void ScriptGetSDCard(void) {
+  if (!HttpCheckPriviledgedAccess()) { return; }
+
+  String stmp = Webserver->uri();
+  char *cp=strstr(stmp.c_str(),"/sdc/");
+//  if (cp) Serial.printf(">>>%s\n",cp);
+  if (cp) {
+#ifdef ESP32
+    cp+=4
+#else
+    cp+=5;
+#endif
+    if (fsp->exists(cp)) {
+      SendFile(cp);
+      return;
+    }
+  }
+  HandleNotFound();
+}
+
+void SendFile(char *fname) {
+char buff[512];
+  const char *mime;
+  char *jpg=strstr(fname,".jpg");
+  if (jpg) {
+    mime="image/jpeg";
+  }
+  char *html=strstr(fname,".html");
+  if (html) {
+    mime="text/html";
+  }
+  char *txt=strstr(fname,".txt");
+  if (txt) {
+    mime="text/plain";
+  }
+
+  WSContentSend_P(HTTP_SCRIPT_MIMES,fname,mime);
+
+
+  File file=fsp->open(fname,FILE_READ);
+  uint32_t siz = file.size();
+  uint32_t len=sizeof(buff);
+  while (siz > 0) {
+      if (len>siz) len=siz;
+      file.read((uint8_t *)buff,len );
+      Webserver->client().write((const char*)buff, len);
+      siz -= len;
+  }
+  file.close();
+
+  Webserver->client().stop();
+}
+#endif // USE_SCRIPT_FATFS
+
+void ScriptFullWebpage(void) {
+  uint32_t fullpage_refresh=10000;
+  if (!HttpCheckPriviledgedAccess()) { return; }
+
+  String stmp = Webserver->uri();
+
+  if (Webserver->hasArg("m")) {     // Status refresh requested
+    if (Webserver->hasArg("sv")) {
+      Script_Check_HTML_Setvars();
+    }
+      WSContentBegin(200, CT_HTML);
+      ScriptWebShow('w');
+      WSContentEnd();
+      Serial.printf("fwp update sv %s\n",stmp.c_str() );
+      return; //goto redraw;
+//    } else {
+  //    Serial.printf("fwp update %s\n",stmp.c_str() );
+  //  }
+
+    return;
+  } else {
+    Serial.printf("fwp other %s\n",stmp.c_str() );
+  }
+
+  WSContentBegin(200, CT_HTML);
+  const char *title="Full Screen";
+  WSContentSend_P(HTTP_SCRIPT_FULLPAGE1, SettingsText(SET_DEVICENAME), title, fullpage_refresh);
+  WSContentSend_P(HTTP_SCRIPT_FULLPAGE2, fullpage_refresh);
+  //WSContentSend_P(PSTR("<div id='l1' name='l1'></div>"));
+
+  //WSContentSendStyle();
+
+
+  WSContentSend_P(PSTR("<div id='l1' name='l1'>"));
+  ScriptWebShow('w');
+  WSContentSend_P(PSTR("</div>"));
+
+  ScriptWebShow('x');
+
+  WSContentStop();
+}
+#endif //SCRIPT_FULL_WEBPAGE
+
 void Script_Check_HTML_Setvars(void) {
 
   if (!HttpCheckPriviledgedAccess()) { return; }
 
   if (Webserver->hasArg("sv")) {
     String stmp = Webserver->arg("sv");
+    Serial.printf("fwp has arg dv %s\n",stmp.c_str());
     char cmdbuf[64];
     memset(cmdbuf,0,sizeof(cmdbuf));
     char *cp=cmdbuf;
@@ -5610,13 +5899,29 @@ uint32_t cnt;
 }
 
 void ScriptWebShow(char mc) {
-  uint8_t web_script=Run_Scripter(">W",-2,0);
+  uint8_t web_script,xflg=0;
+  if (mc=='w' || mc=='x') {
+    if (mc=='x') {
+      xflg=1;
+      mc='$';
+    }
+    web_script=Run_Scripter(">w",-2,0);
+  } else {
+    web_script=Run_Scripter(">W",-2,0);
+  }
+
   if (web_script==99) {
     char tmp[256];
     uint8_t optflg=0;
     uint8_t chartindex=1;
     uint8_t google_libs=0;
     char *lp=glob_script_mem.section_ptr+2;
+    if (mc=='w') {
+      while (*lp) {
+        if (*lp=='\n') break;
+        lp++;
+      }
+    }
     while (lp) {
       while (*lp==SCRIPT_EOL) {
        lp++;
@@ -5628,7 +5933,7 @@ void ScriptWebShow(char mc) {
         // send this line to web
         Replace_Cmd_Vars(lp,1,tmp,sizeof(tmp));
         char *lin=tmp;
-        if (!mc && (*lin!='$')) {
+        if ((!mc && (*lin!='$')) || (mc=='w' && (*lin!='$'))) {
           // normal web section
           if (*lin=='@') {
             lin++;
@@ -5788,18 +6093,24 @@ void ScriptWebShow(char mc) {
             WSContentSend_PD(SCRIPT_MSG_NUMINP,label,minstr,maxstr,stepstr,vstr,vname);
 
           } else {
-            if (optflg) {
-              WSContentSend_PD(PSTR("<div>%s</div>"),tmp);
+            if (mc=='w') {
+              WSContentSend_PD(PSTR("%s"),tmp);
             } else {
-              WSContentSend_PD(PSTR("{s}%s{e}"),tmp);
+              if (optflg) {
+                WSContentSend_PD(PSTR("<div>%s</div>"),tmp);
+              } else {
+                WSContentSend_PD(PSTR("{s}%s{e}"),tmp);
+              }
             }
           }
           // end standard web interface
         } else {
           //  main section interface
           if (*lin==mc) {
+
 #ifdef USE_GOOGLE_CHARTS
             lin++;
+exgc:
             char *lp;
             if (!strncmp(lin,"gc(",3)) {
                 // get google table
@@ -6007,6 +6318,8 @@ void ScriptWebShow(char mc) {
               WSContentSend_PD(PSTR("%s"),lin);
             }
 #else
+            lin++;
+            WSContentSend_PD(PSTR("%s"),lin);
           } else {
           //  WSContentSend_PD(PSTR("%s"),lin);
 #endif //USE_GOOGLE_CHARTS
@@ -6258,6 +6571,18 @@ uint32_t call2https(const char *host, const char *path) {
 
 #endif // SCRIPT_GET_HTTPS_JP
 
+
+void cpy2lf(char *dst,uint32_t dstlen, char *src) {
+  for (uint32_t cnt=0; cnt<dstlen; cnt++) {
+    if (src[cnt]==0 || src[cnt]=='\n') {
+      dst[cnt]=0;
+      break;
+    }
+    dst[cnt]=src[cnt];
+  }
+}
+
+
 /*********************************************************************************************\
  * Interface
 \*********************************************************************************************/
@@ -6278,7 +6603,7 @@ bool Xdrv10(uint8_t function)
       glob_script_mem.script_pram=(uint8_t*)Settings.script_pram[0];
       glob_script_mem.script_pram_size=PMEM_SIZE;
 
-#ifdef USE_UNISHOX_COMPRESSION
+#ifdef USE_SCRIPT_COMPRESSION
       int32_t len_decompressed;
       sprt=(char*)calloc(UNISHOXRSIZE+8,1);
       if (!sprt) { break; }
@@ -6287,7 +6612,7 @@ bool Xdrv10(uint8_t function)
       len_decompressed = SCRIPT_DECOMPRESS(Settings.rules[0], strlen(Settings.rules[0]), glob_script_mem.script_ram, glob_script_mem.script_size);
       if (len_decompressed>0) glob_script_mem.script_ram[len_decompressed]=0;
       //AddLog_P2(LOG_LEVEL_INFO, PSTR("decompressed script len %d"),len_decompressed);
-#endif // USE_UNISHOX_COMPRESSION
+#endif // USE_SCRIPT_COMPRESSION
 
 #ifdef USE_BUTTON_EVENT
       for (uint32_t cnt=0;cnt<MAX_KEYS;cnt++) {
@@ -6405,7 +6730,7 @@ bool Xdrv10(uint8_t function)
       break;
     case FUNC_INIT:
       if (bitRead(Settings.rule_enabled, 0)) {
-        Run_Scripter(">B",2,0);
+        Run_Scripter(">B\n",3,0);
         fast_script=Run_Scripter(">F",-2,0);
 #if defined(USE_SCRIPT_HUE) && defined(USE_WEBSERVER) && defined(USE_EMULATION) && defined(USE_EMULATION_HUE) && defined(USE_LIGHT)
         Script_Check_Hue(0);
@@ -6439,6 +6764,18 @@ bool Xdrv10(uint8_t function)
     case FUNC_WEB_ADD_MAIN_BUTTON:
       if (bitRead(Settings.rule_enabled, 0)) {
         ScriptWebShow('$');
+#ifdef SCRIPT_FULL_WEBPAGE
+        uint8_t web_script=Run_Scripter(">w",-2,0);
+        if (web_script==99) {
+            char bname[48];
+            cpy2lf(bname,sizeof(bname),glob_script_mem.section_ptr+3);
+            WSContentSend_PD(HTTP_WEB_FULL_DISPLAY,bname);
+            Webserver->on("/sfd", ScriptFullWebpage);
+#ifdef USE_SCRIPT_FATFS
+            Webserver->onNotFound(ScriptGetSDCard);
+#endif
+        }
+#endif // SCRIPT_FULL_WEBPAGE
       }
       break;
 #endif // USE_SCRIPT_WEB_DISPLAY

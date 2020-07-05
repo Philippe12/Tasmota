@@ -631,7 +631,7 @@ void CmndGlobalTemp(void)
       global_update = 1;  // Keep global values just entered valid
     }
   }
-  ResponseCmndFloat(global_temperature, 1);
+  ResponseCmndFloat(global_temperature_celsius, 1);
 }
 
 void CmndGlobalHum(void)
@@ -899,6 +899,7 @@ void CmndSetoption(void)
             switch (pindex) {
               case 3:                      // SetOption85 - Enable Device Groups
               case 6:                      // SetOption88 - PWM Dimmer Buttons control remote devices
+              case 15:                     // SetOption97 - Set Baud rate for TuyaMCU serial communication (0 = 9600 or 1 = 115200)
                 restart_flag = 2;
                 break;
             }
@@ -1113,10 +1114,8 @@ void CmndGpio(void)
           }
         }
         char sindex[4] = { 0 };
-#ifdef ESP8266
-        uint32_t sensor_name_idx = sensor_type;
-#else  // ESP32
-        uint32_t sensor_name_idx = sensor_type >> 5;
+        uint32_t sensor_name_idx = BGPIO(sensor_type);
+#ifdef ESP32
         uint32_t nice_list_search = sensor_type & 0xFFE0;
         for (uint32_t j = 0; j < ARRAY_SIZE(kGpioNiceList); j++) {
           uint32_t nls_idx = pgm_read_word(kGpioNiceList + j);
@@ -1125,7 +1124,7 @@ void CmndGpio(void)
             break;
           }
         }
-#endif  // ESP8266 - ESP32
+#endif  // ESP32
         const char *sensor_names = kSensorNames;
         if (sensor_name_idx > GPIO_FIX_START) {
           sensor_name_idx = sensor_name_idx - GPIO_FIX_START -1;
@@ -1156,7 +1155,7 @@ void CmndGpios(void)
     uint32_t ridx = midx;
 #else  // ESP32
     uint32_t ridx = pgm_read_word(kGpioNiceList + i) & 0xFFE0;
-    uint32_t midx = ridx >> 5;
+    uint32_t midx = BGPIO(ridx);
 #endif  // ESP8266 - ESP32
     if ((XdrvMailbox.payload != 255) && GetUsedInModule(midx, cmodule.io)) { continue; }
     if (!jsflg) {
@@ -1776,8 +1775,9 @@ void CmndAltitude(void)
   ResponseCmndNumber(Settings.altitude);
 }
 
-void CmndLedPower(void)
-{
+void CmndLedPower(void) {
+  // If GPIO_LEDLINK (used for network status) then allow up to 4 GPIO_LEDx control using led_power
+  // If no GPIO_LEDLINK then allow legacy single led GPIO_LED1 control using Settings.ledstate
   if ((XdrvMailbox.index > 0) && (XdrvMailbox.index <= MAX_LEDS)) {
     if (!PinUsed(GPIO_LEDLNK)) { XdrvMailbox.index = 1; }
     if ((XdrvMailbox.payload >= 0) && (XdrvMailbox.payload <= 2)) {
@@ -1812,8 +1812,7 @@ void CmndLedPower(void)
   }
 }
 
-void CmndLedState(void)
-{
+void CmndLedState(void) {
   if ((XdrvMailbox.payload >= 0) && (XdrvMailbox.payload < MAX_LED_OPTION)) {
     Settings.ledstate = XdrvMailbox.payload;
     if (!Settings.ledstate) {
@@ -1824,8 +1823,7 @@ void CmndLedState(void)
   ResponseCmndNumber(Settings.ledstate);
 }
 
-void CmndLedMask(void)
-{
+void CmndLedMask(void) {
   if (XdrvMailbox.data_len > 0) {
     Settings.ledmask = XdrvMailbox.payload;
   }
@@ -1834,8 +1832,7 @@ void CmndLedMask(void)
   ResponseCmndChar(stemp1);
 }
 
-void CmndLedPwmOff(void)
-{
+void CmndLedPwmOff(void) {
   if (XdrvMailbox.data_len > 0) {
     if (XdrvMailbox.payload < 0) {
       Settings.ledpwm_off = 0;
@@ -1850,8 +1847,7 @@ void CmndLedPwmOff(void)
   ResponseCmndNumber(Settings.ledpwm_off);
 }
 
-void CmndLedPwmOn(void)
-{
+void CmndLedPwmOn(void) {
   if (XdrvMailbox.data_len > 0) {
     if (XdrvMailbox.payload < 0) {
       Settings.ledpwm_on = 0;
@@ -1866,8 +1862,7 @@ void CmndLedPwmOn(void)
   ResponseCmndNumber(Settings.ledpwm_on);
 }
 
-void CmndLedPwmMode(void)
-{
+void CmndLedPwmMode(void) {
   if ((XdrvMailbox.index > 0) && (XdrvMailbox.index <= MAX_LEDS)) {
     if (!PinUsed(GPIO_LEDLNK)) { XdrvMailbox.index = 1; }
     if ((XdrvMailbox.payload >= 0) && (XdrvMailbox.payload <= 2)) {

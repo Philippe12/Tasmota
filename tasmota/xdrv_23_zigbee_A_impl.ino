@@ -64,10 +64,16 @@ void ZigbeeInit(void)
     Settings.zb_precfgkey_h = USE_ZIGBEE_PRECFGKEY_H;
     Settings.zb_pan_id = USE_ZIGBEE_PANID;
     Settings.zb_channel = USE_ZIGBEE_CHANNEL;
-    Settings.zb_free_byte = 0;
+    Settings.zb_txradio_dbm = USE_ZIGBEE_TXRADIO_DBM;
   }
+
   // update commands with the current settings
-  Z_UpdateConfig(Settings.zb_channel, Settings.zb_pan_id, Settings.zb_ext_panid, Settings.zb_precfgkey_l, Settings.zb_precfgkey_h);
+#ifdef USE_ZIGBEE_ZNP
+  ZNP_UpdateConfig(Settings.zb_channel, Settings.zb_pan_id, Settings.zb_ext_panid, Settings.zb_precfgkey_l, Settings.zb_precfgkey_h);
+#endif
+#ifdef USE_ZIGBEE_EZSP
+  EZ_UpdateConfig(Settings.zb_channel, Settings.zb_pan_id, Settings.zb_ext_panid, Settings.zb_precfgkey_l, Settings.zb_precfgkey_h, Settings.zb_txradio_dbm);
+#endif
 
   ZigbeeInitSerial();
 }
@@ -954,8 +960,8 @@ void CmndZbRestore(void) {
 //
 void CmndZbPermitJoin(void) {
   if (zigbee.init_phase) { ResponseCmndChar_P(PSTR(D_ZIGBEE_NOT_STARTED)); return; }
+
   uint32_t payload = XdrvMailbox.payload;
-  uint16_t dstAddr = 0xFFFC;            // default addr
   uint8_t  duration = 60;               // default 60s
 
   if (payload <= 0) {
@@ -964,7 +970,10 @@ void CmndZbPermitJoin(void) {
     duration = 0xFF;                    // unlimited time
   }
 
+// ZNP Version
 #ifdef USE_ZIGBEE_ZNP
+  uint16_t dstAddr = 0xFFFC;            // default addr
+
   SBuffer buf(34);
   buf.add8(Z_SREQ | Z_ZDO);             // 25
   buf.add8(ZDO_MGMT_PERMIT_JOIN_REQ);   // 36
@@ -974,7 +983,16 @@ void CmndZbPermitJoin(void) {
   buf.add8(0x00);                       // TCSignificance
 
   ZigbeeZNPSend(buf.getBuffer(), buf.len());
+
 #endif // USE_ZIGBEE_ZNP
+
+// EZSP VERSION
+#ifdef USE_ZIGBEE_EZSP
+  SBuffer buf(3);
+  buf.add16(EZSP_permitJoining);
+  buf.add8(duration);
+  ZigbeeEZSPSendCmd(buf.getBuffer(), buf.len(), true);
+#endif // USE_ZIGBEE_EZSP
 
   ResponseCmndDone();
 }
@@ -1006,6 +1024,7 @@ void CmndZbConfig(void) {
   uint64_t    zb_ext_panid   = Settings.zb_ext_panid;
   uint64_t    zb_precfgkey_l = Settings.zb_precfgkey_l;
   uint64_t    zb_precfgkey_h = Settings.zb_precfgkey_h;
+  uint8_t     zb_txradio_dbm = Settings.zb_txradio_dbm;
 
   // if (zigbee.init_phase) { ResponseCmndChar_P(PSTR(D_ZIGBEE_NOT_STARTED)); return; }
   RemoveAllSpaces(XdrvMailbox.data);
@@ -1031,18 +1050,23 @@ void CmndZbConfig(void) {
     // KeyH
     const JsonVariant &val_key_h = GetCaseInsensitive(json, PSTR("KeyH"));
     if (nullptr != &val_key_h) { zb_precfgkey_h = strtoull(val_key_h.as<const char*>(), nullptr, 0); }
+    // TxRadio dBm
+    const JsonVariant &val_txradio = GetCaseInsensitive(json, PSTR("TxRadio"));
+    if (nullptr != &val_txradio) { zb_txradio_dbm = strToUInt(val_txradio); }
 
     // Check if a parameter was changed after all
     if ( (zb_channel      != Settings.zb_channel) ||
          (zb_pan_id       != Settings.zb_pan_id) ||
          (zb_ext_panid    != Settings.zb_ext_panid) ||
          (zb_precfgkey_l  != Settings.zb_precfgkey_l) ||
-         (zb_precfgkey_h  != Settings.zb_precfgkey_h) ) {
+         (zb_precfgkey_h  != Settings.zb_precfgkey_h) ||
+         (zb_txradio_dbm  != Settings.zb_txradio_dbm) ) {
       Settings.zb_channel      = zb_channel;
       Settings.zb_pan_id       = zb_pan_id;
       Settings.zb_ext_panid    = zb_ext_panid;
       Settings.zb_precfgkey_l  = zb_precfgkey_l;
       Settings.zb_precfgkey_h  = zb_precfgkey_h;
+      Settings.zb_txradio_dbm  = zb_txradio_dbm;
       restart_flag = 2;    // save and reboot
     }
   }
@@ -1062,10 +1086,74 @@ void CmndZbConfig(void) {
                   ",\"ExtPanID\":\"%s\""
                   ",\"KeyL\":\"%s\""
                   ",\"KeyH\":\"%s\""
+                  ",\"TxRadio\":%d"
                   "}}"),
                   zb_channel, zb_pan_id,
                   hex_ext_panid,
-                  hex_precfgkey_l, hex_precfgkey_h);
+                  hex_precfgkey_l, hex_precfgkey_h,
+                  zb_txradio_dbm);
+}
+
+/*********************************************************************************************\
+ * Presentation
+\*********************************************************************************************/
+
+void ZigbeeShow(bool json)
+{
+  if (json) {
+    return;
+#ifdef USE_WEBSERVER
+  } else {
+    uint32_t zigbee_num = zigbee_devices.devicesSize();
+    if (!zigbee_num) { return; }
+
+    // Calculate fixed column width for best visual result (Theos opinion)
+    const uint8_t px_batt = (strlen(D_BATT) + 5 + 1) * 10;  // Batt 100% = 90px + 10px column separator
+    const uint8_t px_lqi = (strlen(D_LQI) + 4) * 10;        // LQI 254   = 70px
+
+    WSContentSend_P(PSTR("</table>{t}"));  // Terminate current two column table and open new table
+//    WSContentSend_P(PSTR("<tr><td colspan='2'>{t}"));  // Insert multi column table
+
+//    WSContentSend_PD(PSTR("{s}Device 0x1234</th><td style='width:30%%'>" D_BATT " 100%%</td><td style='width:20%%'>" D_LQI " 254{e}"));
+//    WSContentSend_PD(PSTR("{s}Device 0x1234</th><td style='width:100px'>" D_BATT " 100%%</td><td style='width:70px'>" D_LQI " 254{e}"));
+//    WSContentSend_PD(PSTR("{s}Device 0x1234</th><td style='width:%dpx'>" D_BATT " 100%%</td><td style='width:%dpx'>" D_LQI " 254{e}"), px_batt, px_lqi);
+
+    char sdevice[33];
+    char sbatt[20];
+    char slqi[20];
+
+    for (uint32_t i = 0; i < zigbee_num; i++) {
+      uint16_t shortaddr = zigbee_devices.devicesAt(i).shortaddr;
+      char *name = (char*)zigbee_devices.getFriendlyName(shortaddr);
+      if (nullptr == name) {
+        snprintf_P(sdevice, sizeof(sdevice), PSTR(D_DEVICE " 0x%04X"), shortaddr);
+        name = sdevice;
+      }
+
+      snprintf_P(slqi, sizeof(slqi), PSTR("-"));
+      uint8_t lqi = zigbee_devices.getLQI(shortaddr);
+      if (0xFF != lqi) {
+        snprintf_P(slqi, sizeof(slqi), PSTR("%d"), lqi);
+      }
+
+      snprintf_P(sbatt, sizeof(sbatt), PSTR("&nbsp;"));
+      uint8_t bp = zigbee_devices.getBatteryPercent(shortaddr);
+      if (0xFF != bp) {
+        snprintf_P(sbatt, sizeof(sbatt), PSTR(D_BATT " %d%%"), bp);
+      }
+
+      if (!i) {  // First row needs style info
+        WSContentSend_PD(PSTR("{s}%s</th><td style='width:%dpx'>%s</td><td style='width:%dpx'>" D_LQI " %s{e}"),
+          name, px_batt, sbatt, px_lqi, slqi);
+      } else {   // Following rows don't need style info so reducing ajax package
+        WSContentSend_PD(PSTR("{s}%s{m}%s</td><td>" D_LQI " %s{e}"), name, sbatt, slqi);
+      }
+    }
+
+    WSContentSend_P(PSTR("</table>{t}"));  // Terminate current multi column table and open new table
+//    WSContentSend_P(PSTR("</table>{e}"));  // Terminate multi column table
+#endif
+  }
 }
 
 /*********************************************************************************************\
@@ -1089,6 +1177,11 @@ bool Xdrv23(uint8_t function)
           ZigbeeStateMachine_Run();
 				}
         break;
+#ifdef USE_WEBSERVER
+      case FUNC_WEB_SENSOR:
+        ZigbeeShow(false);
+        break;
+#endif  // USE_WEBSERVER
       case FUNC_PRE_INIT:
         ZigbeeInit();
         break;

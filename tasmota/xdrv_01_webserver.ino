@@ -1595,9 +1595,7 @@ bool HandleRootStatusRefresh(void)
   WSContentBegin(200, CT_HTML);
   WSContentSend_P(PSTR("{t}"));
   XsnsCall(FUNC_WEB_SENSOR);
-#ifdef USE_SCRIPT_WEB_DISPLAY
   XdrvCall(FUNC_WEB_SENSOR);
-#endif
 
   WSContentSend_P(PSTR("</table>"));
 
@@ -1728,7 +1726,7 @@ void HandleTemplateConfiguration(void)
       WSContentSend_P(HTTP_MODULE_TEMPLATE_REPLACE_NO_INDEX, AGPIO(GPIO_USER), D_SENSOR_USER);  // }2'255'>User}3
     }
     uint32_t ridx = pgm_read_word(kGpioNiceList + i) & 0xFFE0;
-    uint32_t midx = ridx >> 5;
+    uint32_t midx = BGPIO(ridx);
     WSContentSend_P(HTTP_MODULE_TEMPLATE_REPLACE_NO_INDEX, ridx, GetTextIndexed(stemp, sizeof(stemp), midx, kSensorNames));
 #endif  // ESP8266 - ESP32
   }
@@ -1905,7 +1903,7 @@ void HandleModuleConfiguration(void)
     }
 #else  // ESP32
     uint32_t ridx = pgm_read_word(kGpioNiceList + i) & 0xFFE0;
-    midx = ridx >> 5;
+    midx = BGPIO(ridx);
     if (!GetUsedInModule(midx, cmodule.io)) {
       WSContentSend_P(HTTP_MODULE_TEMPLATE_REPLACE_NO_INDEX, ridx, GetTextIndexed(stemp, sizeof(stemp), midx, kSensorNames));
     }

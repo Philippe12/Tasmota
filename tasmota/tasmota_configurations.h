@@ -33,7 +33,7 @@
 #undef USE_DISCOVERY                             // Disable mDNS (+8k code or +23.5k code with core 2_5_x, +0.3k mem)
 
 // -- Optional modules ----------------------------
-//#define ROTARY_V1                                // Add support for MI Desk Lamp
+#define ROTARY_V1                                // Add support for Rotary Encoder as used in MI Desk Lamp
 #define USE_SONOFF_RF                            // Add support for Sonoff Rf Bridge (+3k2 code)
   #define USE_RF_FLASH                           // Add support for flashing the EFM8BB1 chip on the Sonoff RF Bridge. C2CK must be connected to GPIO4, C2D to GPIO5 on the PCB (+2k7 code)
 #define USE_SONOFF_SC                            // Add support for Sonoff Sc (+1k1 code)
@@ -347,6 +347,10 @@
 #undef USE_ELECTRIQ_MOODL                        // Disable support for ElectriQ iQ-wifiMOODL RGBW LED controller
 #undef USE_LIGHT_PALETTE                         // Disable support for color palette (+0k9 code)
 
+#undef USE_COUNTER                               // Disable counters
+#define USE_ADC_VCC                              // Display Vcc in Power status. Disable for use as Analog input on selected devices
+#undef USE_DS18x20                               // Disable DS18x20 sensor
+
 #undef USE_ENERGY_SENSOR                         // Disable energy sensors (-14k code)
   #undef USE_PZEM004T                            // Disable PZEM004T energy sensor
   #undef USE_PZEM_AC                             // Disable PZEM014,016 Energy monitor
@@ -386,7 +390,7 @@
 #undef USE_TASMOTA_CLIENT                        // Disable support for Arduino Uno/Pro Mini via serial interface including flashing (+2k3 code, 44 mem)
 #undef USE_OPENTHERM                             // Disable support for OpenTherm (+15k code)
 
-//#define USE_DHT                                  // Add support for DHT11, AM2301 (DHT21, DHT22, AM2302, AM2321) and SI7021 Temperature and Humidity sensor
+#undef USE_DHT                                   // Disable support for DHT11, AM2301 (DHT21, DHT22, AM2302, AM2321) and SI7021 Temperature and Humidity sensor
 #undef USE_MAX31855                              // Disable MAX31855 K-Type thermocouple sensor using softSPI
 #undef USE_MAX31865                              // Disable support for MAX31865 RTD sensors using softSPI
 #undef USE_SR04                                  // Disable support for for HC-SR04 ultrasonic devices
