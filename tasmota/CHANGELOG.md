@@ -1,22 +1,44 @@
-## Released
+## Unreleased (development)
 
-### 8.4.0 20200716
+### 8.4.0.1 20200730
+
+- Fix ESP32 PWM range
+- Add Zigbee better support for IKEA Motion Sensor
+- Add ESP32 Analog input support for GPIO32 to GPIO39
+- Add Zigbee add options to ``ZbSend`` ``Config`` and ``ReadCondig``
+
+### 8.4.0 20200730
 
 - Release George
 
-## Unreleased (development)
+### 8.3.1.7 20200716
+
+- Remove Arduino ESP8266 Core support for versions before 2.7.1
+- Change to limited support of Arduino IDE as an increasing amount of features cannot be compiled with Arduino IDE
+- Change all timer references from ``Arm`` to ``Enable`` in GUI, ``Timer`` command and JSON message
+- Change Domoticz commands prefix from ``Domoticz`` to ``Dz``
+- Change ``Ping`` now reports the hostname instead of IP address (#8948)
+- Change Zigbee randomizing of parameters at first run or after Reset
+- Add command ``DzSend<type> <index>,<value1(;value2)|state>`` to send values or state to Domoticz
+- Add command ``SetOption100 0/1`` to remove Zigbee ``ZbReceived`` value from ``{"ZbReceived":{xxx:yyy}}`` JSON message
+- Add command ``SetOption101 0/1`` to add the Zigbee source endpoint as suffix to attributes, ex `Power3` instead of `Power` if sent from endpoint 3
+- Add command (``S``)``SerialSend6`` \<comma seperated values\> (#8937)
+- Add support for Sonoff Zigbee Bridge as module 75 (#8583)
 
 ### 8.3.1.6 20200617
 
 - Add command ``Module2`` to configure fallback module on fast reboot (#8464)
 - Add command ``SetOption97 0/1`` to switch between Tuya serial speeds 9600 bps (0) or 115200 bps (1)
 - Add command ``SetOption98 0/1`` to provide rotary rule triggers (1) instead of controlling light (0)
+- Add command ``SetOption99 0/1`` to enable zero cross detection on PWM dimmer
 - Add support for Energy sensor (Denky) for French Smart Metering meter provided by global Energy Providers, need a adaptater. See dedicated full [blog](http://hallard.me/category/tinfo/) about French teleinformation stuff
 - Add library to be used for decoding Teleinfo (French Metering Smart Meter)
 - Add support for single wire LMT01 temperature Sensor by justifiably (#8713)
 - Add compile time interlock parameters (#8759)
 - Add compile time user template (#8766)
 - Add rotary encoder support for light dimmer and optional color temperature if button1 still pressed (#8670)
+- Add support for switches/relays using an AC detection circuitry e.g. MOES MS-104B or BlitzWolf SS5 (#8606)
+- Add support for Schneider Electric iEM3000 series Modbus energy meter by Marius Bezuidenhout
 - Fix exception or watchdog on rule re-entry (#8757)
 - Change ESP32 USER GPIO template representation decreasing template message size
 - Change define USE_TASMOTA_SLAVE into USE_TASMOTA_CLIENT
